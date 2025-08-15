@@ -1,42 +1,25 @@
 # RAG pipeline
-from langchain_ollama import ChatOllama
-from langchain.chains.combine_documents import create_stuff_documents_chain
-from langchain.prompts import ChatPromptTemplate
 from langchain.chains import create_retrieval_chain
-from langchain.prompts import (
-    SystemMessagePromptTemplate,
-    HumanMessagePromptTemplate
-)
 from .embeddings import VectorStore
+from .llm import DNDLLMInterface
+from ..obsidian.parser import ObsidianParser
 
 class DNDAssistant:
     def __init__(
             self,
             vault_path: str,
+            homebrew_folders: list = [],
             model_name = 'mistral:7b'
     ):
-        from ..obsidian.parser import ObsidianParser
-        self.parser = ObsidianParser(vault_path)
+        self.parser = ObsidianParser(
+            vault_path,
+            homebrew_folders=homebrew_folders
+        )
         self.vector_store = VectorStore()
 
-        # Store model and prompt setup for later use
-        self.chat_model = ChatOllama(
-            model=model_name,
-            temperature=0.2,
-            max_tokens=2000
-        )
-        self.custom_prompt = ChatPromptTemplate.from_messages([
-            SystemMessagePromptTemplate.from_template(
-                "You are an expert Dungeons and Dragons assistant. Use provided context to answer consistently, prioritizing campaign lore. Answer ONLY using the provided context. If the answer is not present in the context, reply strictly with \"I don't know\" and do NOT make up information. Example:\nContext: [empty]\nQuestion: Who is the king?\nAnswer: I don't know"
-            ),
-            HumanMessagePromptTemplate.from_template(
-                "Context:\n{context}\n\nQuestion: {question}\n\nProvide a detailed response only based on the context. Answer ONLY using the provided context. If the answer is not present in the context, let the user know truthfully."
-            )
-        ])
-        self.combine_docs_chain = create_stuff_documents_chain(
-            self.chat_model,
-            self.custom_prompt
-        )
+        # Use the LLM interface
+        self.llm_interface = DNDLLMInterface(model_name=model_name)
+        self.combine_docs_chain = self.llm_interface.get_combine_docs_chain()
 
     def initialize_vault(self):
         notes = self.parser.parse_vault()
@@ -47,13 +30,14 @@ class DNDAssistant:
             question,
             folder_filter=None,
             context_size=5,
-            score_threshold=0.8
+            score_threshold=0.3  # Much lower threshold for better recall
     ):
-        # Build retriever with current search parameters
-        search_kwargs = {"k": context_size, "score_threshold": score_threshold}
-        if folder_filter:
-            search_kwargs["filter"] = {"folder": folder_filter}
-        retriever = self.vector_store.get_retriever(**search_kwargs)
+        # Use standard retriever
+        retriever = self.vector_store.get_retriever(
+            k=context_size, 
+            score_threshold=score_threshold
+        )
+        
         # Build chain for this query
         qa_chain = create_retrieval_chain(
             retriever=retriever,
